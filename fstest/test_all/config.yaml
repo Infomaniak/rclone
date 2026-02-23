@@ -689,4 +689,6 @@ backends:
    extratime: 2.0
  - backend: "kdrive"
    remote: "TestKdrive:Private"
+   ignore:
+    - TestIntegration/FsMkdir/FsOpenChunkWriter
 

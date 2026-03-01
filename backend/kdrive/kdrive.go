@@ -314,9 +314,11 @@ func (f *Fs) computeRootID() (rootID string, err error) {
 func (f *Fs) getItem(ctx context.Context, id string) (*api.Item, error) {
 	// https://developer.infomaniak.com/docs/api/get/2/drive/%7Bdrive_id%7D/files/%7Bfile_id%7D
 	opts := rest.Opts{
-		Method: "GET",
-		Path:   fmt.Sprintf("/3/drive/%s/files/%s", f.opt.DriveID, id),
+		Method:     "GET",
+		Path:       fmt.Sprintf("/3/drive/%s/files/%s", f.opt.DriveID, id),
+		Parameters: url.Values{},
 	}
+	opts.Parameters.Set("with", "path")
 
 	var result api.ItemResult
 	var resp *http.Response
@@ -616,6 +618,7 @@ func (f *Fs) listHelper(ctx context.Context, dir string, recursive bool, callbac
 
 	_, err = f.listAll(ctx, directoryID, false, false, recursive, func(info *api.Item) bool {
 		remote := path.Join(dir, info.FullPath)
+		fs.Infof(ctx, "listHelper: processing item remote=%s dir=%s fullpath=%s", remote, dir, info.FullPath)
 
 		// When not recursive, only return direct children
 		if !recursive {
@@ -706,14 +709,102 @@ func (f *Fs) ListP(ctx context.Context, dir string, callback fs.ListRCallback) (
 // ListR lists the objects and directories of the Fs starting
 // from dir recursively into out.
 func (f *Fs) ListR(ctx context.Context, dir string, callback fs.ListRCallback) (err error) {
-	l := list.NewHelper(callback)
-	err = f.listHelper(ctx, dir, true, func(o fs.DirEntry) error {
-		// fs.Debugf(nil, "ADD OBJECT %s", o.Remote())
-		return l.Add(o)
-	})
+	directoryID, err := f.dirCache.FindDir(ctx, dir, false)
 	if err != nil {
 		return err
 	}
+
+	// The listing API does not work on the drive root (ID "1"), we fallback to recursive listHelper.
+	if directoryID == "1" {
+		l := list.NewHelper(callback)
+		err = f.listHelper(ctx, dir, true, func(o fs.DirEntry) error {
+			return l.Add(o)
+		})
+		if err != nil {
+			return err
+		}
+		return l.Flush()
+	}
+
+	// get the full path of the directory
+	rootItem, _ := f.getItem(ctx, directoryID)
+	rootPath := rootItem.FullPath + "/"
+
+	l := list.NewHelper(callback)
+	var cursor string
+
+	for {
+		opts := rest.Opts{
+			Method:     "GET",
+			Path:       fmt.Sprintf("/3/drive/%s/files/%s/listing/full", f.opt.DriveID, directoryID),
+			Parameters: url.Values{},
+		}
+		opts.Parameters.Set("recursive", "true")
+		opts.Parameters.Set("with", "path")
+
+		if cursor != "" {
+			opts.Parameters.Set("cursor", cursor)
+		}
+
+		var result api.ListingResponse
+		var resp *http.Response
+		err = f.pacer.Call(func() (bool, error) {
+			resp, err = f.srv.CallJSON(ctx, &opts, nil, &result)
+			err = result.ResultStatus.Update(err)
+			return shouldRetry(ctx, resp, err)
+		})
+		if err != nil {
+			return fmt.Errorf("couldn't list files: %w", err)
+		}
+
+		for i := range result.Data.Files {
+			item := &result.Data.Files[i]
+			item.Name = f.opt.Enc.ToStandardName(item.Name)
+
+			var relativePath string
+			if strings.HasPrefix(item.FullPath, rootPath) {
+				// Strip the rootPath prefix to get the path relative to the listed directory
+				relativePath = item.FullPath[len(rootPath):]
+			} else {
+				// If the FullPath doesn't start with rootPath, it means it's a direct child of the listed directory
+				relativePath = item.FullPath
+			}
+
+			// Construct the remote path relative to the Fs root
+			remote := path.Join(dir, f.opt.Enc.ToStandardPath(relativePath))
+
+			// Create the object/directory
+			if item.Type == "dir" {
+				// cache the directory ID for later lookups
+				f.dirCache.Put(remote, strconv.Itoa(item.ID))
+
+				d := fs.NewDir(remote, item.ModTime()).SetID(strconv.Itoa(item.ID))
+				d.SetParentID(strconv.Itoa(item.ParentID))
+				d.SetSize(item.Size)
+				err = l.Add(d)
+			} else {
+				o := &Object{
+					fs:     f,
+					remote: remote,
+				}
+
+				err = o.setMetaData(item)
+				if err != nil {
+					return fmt.Errorf("failed to set metadata: %w", err)
+				}
+				err = l.Add(o)
+			}
+			if err != nil {
+				return err
+			}
+		}
+
+		if !result.Data.HasMore {
+			break
+		}
+		cursor = result.Data.Cursor
+	}
+
 	return l.Flush()
 }
 

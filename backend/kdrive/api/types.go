@@ -123,6 +123,15 @@ type SearchResult struct {
 	ResponseAt int    `json:"response_at"`
 }
 
+type ListingResponse struct {
+	ResultStatus
+	Data struct {
+		Files   []Item `json:"files"`
+		HasMore bool   `json:"has_more"`
+		Cursor  string `json:"cursor"`
+	} `json:"data"`
+}
+
 // ModTime returns the modification time of the item
 func (i *Item) ModTime() (t time.Time) {
 	t = time.Time(i.LastModifiedAt)

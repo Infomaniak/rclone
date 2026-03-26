@@ -48,7 +48,7 @@ const (
 
 // Register with Fs
 func init() {
-	hash.RegisterHash("kdrivehash", "khash", 16, khash.New)
+	kDriveHashType = hash.RegisterHash("kdrivehash", "khash", 16, khash.New)
 	fs.Register(&fs.RegInfo{
 		Name:        "kdrive",
 		Description: "Infomaniak kDrive",
@@ -1283,6 +1283,16 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 	if t != kDriveHashType {
 		return "", hash.ErrUnsupported
 	}
+
+	// Rclone generic hasher cannot dynamically adjust to specific file chunk sizes natively.
+	// If the file requires a chunk size different from the default (e.g. > 200GB files
+	// hitting the 10000 chunk limit), we bypass hash checking by returning ErrUnsupported.
+	// Rclone will then fallback securely to size and modification time checks.
+	expectedChunkSize := chunksize.CalculateChunkSize(o.Size(), chunksize.ChunkSizeConfig.DefaultChunkSize)
+	if expectedChunkSize != chunksize.ChunkSizeConfig.DefaultChunkSize {
+		return "", hash.ErrUnsupported
+	}
+
 	if o.xxh3 == "" {
 		remoteHash, err := o.retrieveHash(ctx)
 		if err != nil {

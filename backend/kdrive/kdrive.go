@@ -1286,11 +1286,11 @@ func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
 
 	// Rclone generic hasher cannot dynamically adjust to specific file chunk sizes natively.
 	// If the file requires a chunk size different from the default (e.g. > 200GB files
-	// hitting the 10000 chunk limit), we bypass hash checking by returning ErrUnsupported.
+	// hitting the 10000 chunk limit), we bypass hash checking by returning an empty string.
 	// Rclone will then fallback securely to size and modification time checks.
 	expectedChunkSize := chunksize.CalculateChunkSize(o.Size(), chunksize.ChunkSizeConfig.DefaultChunkSize)
 	if expectedChunkSize != chunksize.ChunkSizeConfig.DefaultChunkSize {
-		return "", hash.ErrUnsupported
+		return "", nil
 	}
 
 	if o.xxh3 == "" {

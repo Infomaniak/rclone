@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/url"
 	"path"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -31,14 +30,13 @@ import (
 
 // uploadSession implements fs.ChunkWriter for kdrive multipart uploads
 type uploadSession struct {
-	f           *Fs
-	parentID    string
-	fileName    string
-	token       string
-	uploadURL   string
-	fileInfo    *api.Item
-	chunkCount  int
-	chunkHashes map[int]string
+	f          *Fs
+	parentID   string
+	fileName   string
+	token      string
+	uploadURL  string
+	fileInfo   *api.Item
+	chunkCount int
 }
 
 // newChunkWriter returns chunk writer info and the upload session
@@ -94,12 +92,11 @@ func (f *Fs) newChunkWriter(ctx context.Context, remote string, src fs.ObjectInf
 	}
 
 	chunkWriter := &uploadSession{
-		f:           f,
-		parentID:    parentID,
-		fileName:    leaf,
-		token:       sessionResp.Data.Token,
-		uploadURL:   sessionResp.Data.UploadURL,
-		chunkHashes: make(map[int]string),
+		f:         f,
+		parentID:  parentID,
+		fileName:  leaf,
+		token:     sessionResp.Data.Token,
+		uploadURL: sessionResp.Data.UploadURL,
 	}
 
 	info = fs.ChunkWriterInfo{
@@ -166,7 +163,6 @@ func (u *uploadSession) WriteChunk(ctx context.Context, chunkNumber int, reader 
 		}
 	}
 
-	u.chunkHashes[sourceChunkNumber] = strings.TrimPrefix(chunkHash, "xxh3:")
 	u.chunkCount++
 	fs.Debugf(u, "uploaded chunk %d (size: %d, hash: %s)", sourceChunkNumber, n, chunkHash)
 	return n, nil
@@ -354,17 +350,6 @@ func (u uploadSession) CheckHash(ctx context.Context, info fs.ChunkWriterInfo, c
 	}
 
 	localHash := hex.EncodeToString(chunkHasher.Sum(nil))
-
-	keys := make([]int, 0, len(u.chunkHashes))
-	for k := range u.chunkHashes {
-		keys = append(keys, k)
-	}
-	sort.Ints(keys)
-
-	concatenedHashes := ""
-	for _, k := range keys {
-		concatenedHashes = concatenedHashes + u.chunkHashes[k]
-	}
 
 	if valid, _ := khash.ValidateHash(localHash, remoteHash); !valid {
 		err = fmt.Errorf(

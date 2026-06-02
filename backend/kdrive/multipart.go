@@ -346,7 +346,7 @@ func (u uploadSession) CheckHash(ctx context.Context, info fs.ChunkWriterInfo, c
 	}
 
 	// validate with khash only if it's a nested hash
-	if khash.IsNestedHash(remoteHash) == false {
+	if !khash.IsNestedHash(remoteHash) {
 		return nil
 	}
 

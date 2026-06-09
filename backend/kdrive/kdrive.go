@@ -135,6 +135,7 @@ type Fs struct {
 	dirCache      *dircache.DirCache // Map of directory path to directory id
 	pacer         *fs.Pacer          // pacer for API calls
 	cacheNotFound map[string]cacheEntry
+	sharedID      string // ID of the "Shared" folder
 }
 
 // Object describes a kdrive object
@@ -358,6 +359,7 @@ func (f *Fs) computeRootID() (rootID string, err error) {
 			rootID, _, err = f.FindLeaf(ctx, "1", "Common documents")
 		case "shared":
 			rootID, _, err = f.FindLeaf(ctx, "1", "Shared")
+			f.sharedID = rootID
 		case "":
 			rootID, _, err = f.FindLeaf(ctx, "1", "Private")
 		default:
@@ -593,16 +595,22 @@ func (f *Fs) listAll(ctx context.Context, dirID string, directoriesOnly bool, fi
 	}
 	rootPath := rootItem.FullPath + "/"
 
-	listSomeFiles := func(currentDirID string, fromCursor string) (api.SearchResult, error) {
+	listSomeFiles := func(currentDirID string, currentDriveID string, fromCursor string) (api.SearchResult, error) {
 		// https://developer.infomaniak.com/docs/api/get/3/drive/%7Bdrive_id%7D/files/%7Bfile_id%7D/files
+		apiPath := fmt.Sprintf("/3/drive/%s/files/%s/files", currentDriveID, currentDirID)
+		if currentDirID == f.sharedID {
+			// https://developer.infomaniak.com/docs/api/get/3/drive/files/shared_with_me
+			apiPath = "/3/drive/files/shared_with_me"
+		}
+
 		opts := rest.Opts{
 			Method:     "GET",
-			Path:       fmt.Sprintf("/3/drive/%s/files/%s/files", f.opt.DriveID, currentDirID),
+			Path:       apiPath,
 			Parameters: url.Values{},
 		}
 		opts.Parameters.Set("limit", "1000")
 		opts.Parameters.Set("with", "path")
-		if recursive {
+		if recursive && currentDirID != f.sharedID {
 			opts.Parameters.Set("depth", "unlimited")
 		}
 
@@ -624,13 +632,13 @@ func (f *Fs) listAll(ctx context.Context, dirID string, directoriesOnly bool, fi
 	}
 
 	var listErr error
-	var recursiveContents func(currentDirID string, currentSubDir string, fromCursor string)
+	var recursiveContents func(currentDirID string, currentDriveID string, currentSubDir string, fromCursor string)
 
-	recursiveContents = func(currentDirID string, currentSubDir string, fromCursor string) {
+	recursiveContents = func(currentDirID string, currentDriveID string, currentSubDir string, fromCursor string) {
 		if listErr != nil {
 			return
 		}
-		result, err := listSomeFiles(currentDirID, fromCursor)
+		result, err := listSomeFiles(currentDirID, currentDriveID, fromCursor)
 		if err != nil {
 			listErr = err
 			return
@@ -657,18 +665,19 @@ func (f *Fs) listAll(ctx context.Context, dirID string, directoriesOnly bool, fi
 				break
 			}
 
-			if recursive && currentDirID == "1" && item.Type == "dir" {
-				recursiveContents(strconv.Itoa(item.ID), path.Join(currentSubDir, item.Name), "" /*reset cursor*/)
+			if recursive && (currentDirID == "1" || currentDirID == f.sharedID) && item.Type == "dir" {
+				itemDriveID := strconv.Itoa(item.DriveID)
+				recursiveContents(strconv.Itoa(item.ID), itemDriveID, path.Join(currentSubDir, item.Name), "" /*reset cursor*/)
 			}
 		}
 
 		// Then load the rest of the files in that folder and apply the same logic
 		if result.HasMore {
-			recursiveContents(currentDirID, currentSubDir, result.Cursor)
+			recursiveContents(currentDirID, currentDriveID, currentSubDir, result.Cursor)
 		}
 	}
 
-	recursiveContents(dirID, "", "")
+	recursiveContents(dirID, f.opt.DriveID, "", "")
 
 	if listErr != nil {
 		return found, listErr
@@ -780,7 +789,6 @@ func (f *Fs) ListP(ctx context.Context, dir string, callback fs.ListRCallback) (
 func (f *Fs) ListR(ctx context.Context, dir string, callback fs.ListRCallback) (err error) {
 	l := list.NewHelper(callback)
 	err = f.listHelper(ctx, dir, true, func(o fs.DirEntry) error {
-		// fs.Debugf(nil, "ADD OBJECT %s", o.Remote())
 		return l.Add(o)
 	})
 	if err != nil {

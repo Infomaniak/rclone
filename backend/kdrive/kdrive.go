@@ -150,6 +150,7 @@ type Object struct {
 	id          string    // ID of the object
 	xxh3        string    // XXH3 if known
 	nestedHash  bool      // if XXH3 is a nested hash
+	driveID     string    // drive ID of the object
 }
 
 type cacheEntry struct {
@@ -379,7 +380,7 @@ func (f *Fs) computeRootID() (rootID string, err error) {
 
 // getItem retrieves a file or directory by its ID.
 func (f *Fs) getItem(ctx context.Context, id string) (*api.Item, error) {
-	// https://developer.infomaniak.com/docs/api/get/2/drive/%7Bdrive_id%7D/files/%7Bfile_id%7D
+	// https://developer.infomaniak.com/docs/api/get/3/drive/%7Bdrive_id%7D/files/%7Bfile_id%7D
 	opts := rest.Opts{
 		Method:     "GET",
 		Path:       fmt.Sprintf("/3/drive/%s/files/%s", f.opt.DriveID, id),
@@ -1310,6 +1311,14 @@ func (o *Object) Remote() string {
 	return o.remote
 }
 
+// getDriveID returns the drive ID for this object, falling back to the configured drive ID
+func (o *Object) getDriveID() string {
+	if o.driveID != "" {
+		return o.driveID
+	}
+	return o.fs.opt.DriveID
+}
+
 // get file hash
 func (o *Object) retrieveHash(ctx context.Context) (hash string, err error) {
 	var resp *http.Response
@@ -1318,7 +1327,7 @@ func (o *Object) retrieveHash(ctx context.Context) (hash string, err error) {
 	// https://developer.infomaniak.com/docs/api/get/2/drive/%7Bdrive_id%7D/files/%7Bfile_id%7D/hash
 	opts := rest.Opts{
 		Method: "GET",
-		Path:   fmt.Sprintf("/2/drive/%s/files/%s/hash", o.fs.opt.DriveID, o.id),
+		Path:   fmt.Sprintf("/2/drive/%s/files/%s/hash", o.getDriveID(), o.id),
 	}
 	err = o.fs.pacer.Call(func() (bool, error) {
 		resp, err = o.fs.srv.CallJSON(ctx, &opts, nil, &result)
@@ -1375,6 +1384,9 @@ func (o *Object) setMetaData(info *api.Item) (err error) {
 	o.size = info.Size
 	o.modTime = info.ModTime()
 	o.id = strconv.Itoa(info.ID)
+	if info.DriveID > 0 {
+		o.driveID = strconv.Itoa(info.DriveID)
+	}
 	if len(o.xxh3) == 0 && len(info.Hash) > 0 {
 		o.setHash(info.Hash)
 	}
@@ -1436,7 +1448,7 @@ func (o *Object) SetModTime(ctx context.Context, modTime time.Time) error {
 	// https://developer.infomaniak.com/docs/api/post/3/drive/%7Bdrive_id%7D/files/%7Bfile_id%7D/last-modified
 	opts := rest.Opts{
 		Method: "POST",
-		Path:   fmt.Sprintf("/3/drive/%s/files/%s/last-modified", o.fs.opt.DriveID, o.id),
+		Path:   fmt.Sprintf("/3/drive/%s/files/%s/last-modified", o.getDriveID(), o.id),
 	}
 
 	err := o.fs.pacer.Call(func() (bool, error) {
@@ -1467,7 +1479,7 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 	// https://developer.infomaniak.com/docs/api/get/2/drive/%7Bdrive_id%7D/files/%7Bfile_id%7D/download
 	opts := rest.Opts{
 		Method:  "GET",
-		Path:    fmt.Sprintf("/2/drive/%s/files/%s/download", o.fs.opt.DriveID, o.id),
+		Path:    fmt.Sprintf("/2/drive/%s/files/%s/download", o.getDriveID(), o.id),
 		Options: options,
 	}
 	err = o.fs.pacer.Call(func() (bool, error) {
@@ -1610,7 +1622,7 @@ func (o *Object) Remove(ctx context.Context) error {
 	// https://developer.infomaniak.com/docs/api/delete/2/drive/%7Bdrive_id%7D/files/%7Bfile_id%7D
 	opts := rest.Opts{
 		Method: "DELETE",
-		Path:   fmt.Sprintf("/2/drive/%s/files/%s", o.fs.opt.DriveID, o.id),
+		Path:   fmt.Sprintf("/2/drive/%s/files/%s", o.getDriveID(), o.id),
 	}
 	var result api.CancellableResponse
 	return o.fs.pacer.Call(func() (bool, error) {
